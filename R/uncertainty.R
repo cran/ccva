@@ -17,6 +17,14 @@
 #'   from the simplex, so the intervals show how much a ranking depends on
 #'   the arbitrary choice of weights.
 #'
+#' Units are often not independent: related species share traits, and
+#' species living in the same lake or river basin share their range and
+#' hence their exposure. Resampling such units one at a time treats them as
+#' independent replicates and makes the intervals too narrow. With
+#' `cluster`, the bootstrap resamples whole groups (a cluster bootstrap):
+#' every unit of a drawn group enters the replicate, so dependence within
+#' groups is preserved.
+#'
 #' For each unit the result gives an interval for its score and for its
 #' rank; for each pair of units, the probability that one is more vulnerable
 #' than the other. A ranking of two units is called *robust* when that
@@ -31,6 +39,11 @@
 #'   prediction error to the bootstrap draws (recommended).
 #' @param seed Optional random seed.
 #' @param progress Show a progress bar.
+#' @param cluster For `type = "bootstrap"`: optional grouping of the units
+#'   (for example family, genus or river basin), given as the name of a
+#'   column of the data or as a vector with one value per unit. Groups are
+#'   resampled with replacement instead of units. Units with a missing group
+#'   form groups of their own.
 #' @return An object of class `ccva_uncertainty` with `summary` (one row
 #'   per unit: estimate, interval, rank interval), `pairwise` (matrix of
 #'   P(row unit more vulnerable than column unit)), `robust_share`,
@@ -43,11 +56,16 @@
 #' \donttest{
 #' ub <- ccva_uncertainty(fit, "bootstrap", R = 50, seed = 1)
 #' head(ub$summary)
+#'
+#' # cluster bootstrap: resample groups of related units
+#' grp <- rep(1:60, each = 5)
+#' uc <- ccva_uncertainty(fit, "bootstrap", R = 50, seed = 1, cluster = grp)
+#' uc
 #' }
 ccva_uncertainty <- function(fit, type = c("bootstrap", "weights"),
                              R = 200, level = 0.95, robust = 0.05,
                              score_error = TRUE, seed = NULL,
-                             progress = interactive()) {
+                             progress = interactive(), cluster = NULL) {
   type <- match.arg(type)
   if (!inherits(fit, "ccva_fit")) stop("`fit` must be a ccva_fit.",
                                        call. = FALSE)
@@ -55,6 +73,9 @@ ccva_uncertainty <- function(fit, type = c("bootstrap", "weights"),
   x <- fit$data
   n <- length(x$id)
   failures <- 0L
+  groups <- .cluster_groups(x, cluster)
+  if (!is.null(groups) && type == "weights")
+    stop("`cluster` applies to type = \"bootstrap\" only.", call. = FALSE)
 
   if (type == "weights") {
     if (fit$method != "weighted")
@@ -69,9 +90,12 @@ ccva_uncertainty <- function(fit, type = c("bootstrap", "weights"),
       (C %*% (w * s) + sum(w[s < 0])) / sum(w)))
   } else {
     if (progress) pb <- utils::txtProgressBar(0, R, style = 3)
+    op <- options(ccva.light_refit = TRUE)
+    on.exit(options(op), add = TRUE)
     draws <- matrix(NA_real_, R, n)
     for (b in seq_len(R)) {
-      rows <- sample.int(n, n, replace = TRUE)
+      rows <- if (is.null(groups)) sample.int(n, n, replace = TRUE) else
+        .cluster_rows(groups)
       xb <- .subset_ccva(x, rows)
       p <- tryCatch(suppressMessages(suppressWarnings({
         fb <- do.call(ccva_combine, c(list(x = xb), fit$args))
@@ -122,14 +146,21 @@ ccva_uncertainty <- function(fit, type = c("bootstrap", "weights"),
   structure(list(summary = summ[order(summ$rank), ], pairwise = P,
                  robust_share = robust_share, overlap_share = overlap_share,
                  draws = draws, type = type, level = level, robust = robust,
-                 R = nrow(draws), failures = failures, method = fit$method),
+                 R = nrow(draws), failures = failures, method = fit$method,
+                 cluster = if (is.null(groups)) NULL else
+                   list(n_groups = length(unique(groups)),
+                        name = if (is.character(cluster) && length(cluster) == 1)
+                          cluster else "user-supplied")),
             class = "ccva_uncertainty")
 }
 
 #' @export
 print.ccva_uncertainty <- function(x, ...) {
-  lab <- if (x$type == "bootstrap") "bootstrap (sampling)" else
-    "random weights (weighting)"
+  lab <- if (x$type == "bootstrap") {
+    if (is.null(x$cluster)) "bootstrap (sampling)" else
+      sprintf("cluster bootstrap over %d groups (%s)", x$cluster$n_groups,
+              x$cluster$name)
+  } else "random weights (weighting)"
   cat(sprintf("<ccva_uncertainty> %s, %d replicates, %d%% intervals\n",
               lab, x$R, round(100 * x$level)))
   s <- x$summary
@@ -146,4 +177,33 @@ print.ccva_uncertainty <- function(x, ...) {
                 top$unit[i], top$estimate[i], top$lower[i], top$upper[i],
                 top$rank[i], round(top$rank_low[i]), round(top$rank_high[i])))
   invisible(x)
+}
+
+# Cluster membership of every unit (NULL for the ordinary bootstrap)
+.cluster_groups <- function(x, cluster) {
+  if (is.null(cluster)) return(NULL)
+  n <- length(x$id)
+  g <- if (is.character(cluster) && length(cluster) == 1 && n != 1) {
+    if (!cluster %in% names(x$data))
+      stop("Cluster column '", cluster, "' not found in the data.",
+           call. = FALSE)
+    x$data[[cluster]]
+  } else cluster
+  if (length(g) != n)
+    stop("`cluster` must name a column or give one value per unit.",
+         call. = FALSE)
+  g <- as.character(g)
+  miss <- is.na(g)
+  g[miss] <- paste0(".unit_", which(miss))
+  if (length(unique(g)) < 5)
+    stop("A cluster bootstrap needs at least 5 groups.", call. = FALSE)
+  g
+}
+
+# Rows of one cluster-bootstrap replicate: draw as many groups as there are,
+# with replacement, and take all units of each drawn group
+.cluster_rows <- function(groups) {
+  idx <- split(seq_along(groups), groups)
+  drawn <- sample.int(length(idx), length(idx), replace = TRUE)
+  unlist(idx[drawn], use.names = FALSE)
 }

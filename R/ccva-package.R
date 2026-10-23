@@ -53,5 +53,5 @@ utils::globalVariables(c(
   "var1", "var2", "r", "xlab", "ylab", "class", "fit", "group",
   "fill_col", "lab_col", "rank_a", "rank_b", "id", "pos", "alpha", "lx",
   "ly", "p", "std", "probability", "predicted", "observed", "n",
-  "share_high", "mean_vulnerability", "n_species", "lab", "site"
+  "share_high", "mean_vulnerability", "n_species", "lab", "site", "what", "cv", "fold"
 ))

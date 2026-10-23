@@ -39,10 +39,10 @@ ccva_check <- function(x, redundancy = 0.9, component_method = "mean") {
       return(data.frame(component = cmp, n_indicators = k, alpha = NA,
                         alpha_std = NA, mean_r = NA, p_over_n = k / n))
     }
-    R <- stats::cor(X)
+    R <- stats::cor(X, use = "pairwise.complete.obs")
     data.frame(component = cmp, n_indicators = k,
                alpha = .cronbach(X), alpha_std = .cronbach(scale(X)),
-               mean_r = mean(R[upper.tri(R)]), p_over_n = k / n)
+               mean_r = mean(R[upper.tri(R)], na.rm = TRUE), p_over_n = k / n)
   }))
   alpha$verdict <- cut(alpha$alpha, c(-Inf, 0.6, 0.7, 0.8, Inf),
                        labels = c("questionable", "acceptable-",
@@ -55,22 +55,26 @@ ccva_check <- function(x, redundancy = 0.9, component_method = "mean") {
   item_total <- do.call(rbind, lapply(comps, function(cmp) {
     X <- .oriented(x, cmp)
     if (ncol(X) < 2 || ncol(X) > 200) return(NULL)
-    tot <- rowSums(scale(X))
+    Zx <- scale(X)
+    tot <- rowSums(Zx, na.rm = TRUE)
     data.frame(component = cmp, indicator = colnames(X),
                r_item_total = vapply(seq_len(ncol(X)), function(j)
-                 stats::cor(X[, j], tot - scale(X)[, j]), numeric(1)),
+                 stats::cor(X[, j], tot - ifelse(is.na(Zx[, j]), 0, Zx[, j]),
+                            use = "pairwise.complete.obs"), numeric(1)),
                row.names = NULL)
   }))
 
   cs <- as.data.frame(lapply(stats::setNames(comps, comps), function(cmp)
     ccva_component(x, cmp, method = component_method)$score))
-  comp_cor <- stats::cor(cs, method = "spearman")
+  comp_cor <- stats::cor(cs, method = "spearman",
+                         use = "pairwise.complete.obs")
 
   vars <- unlist(x$indicators[comps])
   red <- NULL
   if (length(vars) <= 500) {
     allX <- do.call(cbind, lapply(comps, function(cmp) .oriented(x, cmp)))
-    R <- stats::cor(allX, method = "spearman")
+    R <- stats::cor(allX, method = "spearman", use = "pairwise.complete.obs")
+    R[is.na(R)] <- 0
     idx <- which(abs(R) > redundancy & upper.tri(R), arr.ind = TRUE)
     if (nrow(idx))
       red <- data.frame(var1 = rownames(R)[idx[, 1]],
@@ -120,9 +124,11 @@ print.ccva_check <- function(x, ...) {
 }
 
 .cronbach <- function(X) {
+  # from the (pairwise) covariance matrix, so missing values are allowed
   k <- ncol(X)
-  (k / (k - 1)) * (1 - sum(apply(X, 2, stats::var)) /
-                     stats::var(rowSums(X)))
+  C <- stats::cov(X, use = "pairwise.complete.obs")
+  C[is.na(C)] <- 0
+  (k / (k - 1)) * (1 - sum(diag(C)) / sum(C))
 }
 
 #' Validate vulnerability scores against observed outcomes
@@ -162,8 +168,11 @@ ccva_validate <- function(fit, truth = NULL) {
 
 .val_row <- function(name, type, s, y) {
   data.frame(target = name, type = type,
-             spearman = stats::cor(s, y, method = "spearman"),
-             kendall = stats::cor(s, y, method = "kendall"))
+             spearman = stats::cor(s, y, method = "spearman",
+                                   use = "complete.obs"),
+             kendall = stats::cor(s, y, method = "kendall",
+                                  use = "complete.obs"),
+             n = sum(stats::complete.cases(s, y)))
 }
 
 #' Compare several CCVA fits

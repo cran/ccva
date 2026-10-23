@@ -12,7 +12,8 @@ ccva_calibrate(
   uncertainty = NULL,
   R = 500,
   level = 0.95,
-  seed = NULL
+  seed = NULL,
+  cv = NULL
 )
 }
 \arguments{
@@ -35,12 +36,20 @@ Vulnerable or worse on a 0--3 scale; otherwise the median.}
 \item{level}{Interval coverage.}
 
 \item{seed}{Optional random seed.}
+
+\item{cv}{Optional [ccva_cv()] result. Its cross-validated scores replace
+the in-sample scores, both for fitting the calibration and for the
+predicted probabilities, so the calibration is out of sample for the
+hidden outcomes. `uncertainty` is then ignored, because its draws are
+in-sample.}
 }
 \value{
 An object of class `ccva_calibration` with `units` (probability
   and interval per unit), `curve` (probability across the score range),
-  `bins` (observed vs predicted), `metrics` (AUC, Brier score) and the
-  `model`.
+  `bins` (observed vs predicted), `metrics` (AUC, Brier score), the
+  `model`, and `draws` (bootstrap draws of every unit's probability, one
+  row per replicate), from which intervals for sums -- such as the
+  expected number of threatened species in a group -- can be computed.
 }
 \description{
 Rankings say which species are *more* vulnerable than others; managers
@@ -58,8 +67,9 @@ scores themselves is propagated into the risk.
 
 When the outcome was also used to fit the vulnerability model (latent,
 shape and penalised methods use the outcomes), this calibration is
-in-sample and optimistic. For an honest assessment, calibrate against an
-outcome the model did not see.
+in-sample and optimistic. For an honest assessment, pass cross-validated
+scores from [ccva_cv()] (with the calibrating outcome among those
+hidden), or calibrate against an outcome the model did not see.
 }
 \examples{
 fit <- ccva_combine(ccva_sim_data(), "weighted",

@@ -18,17 +18,23 @@ capacity** — and puts it on a statistical footing:
   for: Ofori-style 1–3 scoring, continuous indices, PCA, or penalised
   regression (LASSO / elastic net) when predictors outnumber species, as
   with genomic data.
-- **Vulnerability by a choice of models**: the conventional weighted index
-  of Ofori et al. (2017), a shape-constrained additive model, a
-  latent-variable structural equation model in which vulnerability is
-  *inferred* from observable proxies, or a penalised two-stage model.
+- **Vulnerability by a choice of models**: the rule-based framework of
+  Foden et al. (2013), the conventional weighted index of Ofori et al.
+  (2017), a shape-constrained additive model, a latent-variable structural
+  equation model in which vulnerability is *inferred* from observable
+  proxies (with reflective or formative components), or a penalised
+  two-stage model.
+- **Real, incomplete data**: missing traits and outcomes are handled by
+  full-information maximum likelihood, so species without a Red List
+  assessment are still scored.
 - **Constraints as the core contribution.** Ecological knowledge is imposed
   explicitly on predictors (sign, bounds, equality, fixed values) and on
   each component's role (direction, bounds, adaptive capacity as a moderator
   only). The same constraint carries across every model that can express it.
 - **Assessment, not just a ranking**: internal-consistency diagnostics,
-  validation against observed outcomes, bootstrap and weight-based
-  uncertainty for scores and ranks, outcome-calibrated class cut-offs, and a
+  validation against observed outcomes (in sample and cross-validated),
+  bootstrap -- including a cluster bootstrap for related species -- and
+  weight-based uncertainty for scores and ranks, outcome-calibrated class cut-offs, and a
   plot for every step.
 - **Extensible.** New component methods, combination methods and constraint
   types register through `ccva_register()`.
@@ -130,7 +136,7 @@ risk <- ccva_calibrate(causal, outcome = "iucn",
 | Components | `ccva_exposure()`, `ccva_sensitivity()`, `ccva_adaptive()` |
 | Vulnerability | `ccva_combine()`, `ccva()` |
 | Constraints | `ccva_constraints()`, `constrain_sign()`, `constrain_bounds()`, `constrain_equal()`, `constrain_fixed()`, `constrain_moderator()`, `constrain_shape()`, `constrain_link()` |
-| Assessment | `ccva_recommend()`, `ccva_check()`, `ccva_validate()`, `ccva_compare()`, `ccva_uncertainty()`, `ccva_calibrate()`, `ccva_classify()`, `ccva_rank()`, `ccva_aggregate()` |
+| Assessment | `ccva_recommend()`, `ccva_check()`, `ccva_validate()`, `ccva_compare()`, `ccva_cv()`, `ccva_uncertainty()`, `ccva_calibrate()`, `ccva_classify()`, `ccva_rank()`, `ccva_aggregate()` |
 | Outputs | `ccva_plot()`, `ccva_report()` |
 | Extending | `ccva_register()`, `ccva_methods()` |
 
@@ -152,6 +158,11 @@ Contributions are welcome — open an issue to discuss a new method or
 constraint.
 
 ## References
+
+Foden, W. B. et al. (2013). Identifying the world's most climate change
+vulnerable species: a systematic trait-based assessment of all birds,
+amphibians and corals. *PLoS ONE* 8, e65427.
+[doi:10.1371/journal.pone.0065427](https://doi.org/10.1371/journal.pone.0065427)
 
 Ofori, B. Y., Stow, A. J., Baumgartner, J. B. and Beaumont, L. J. (2017).
 Influence of adaptive capacity on the outcome of climate change

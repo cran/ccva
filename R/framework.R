@@ -14,8 +14,9 @@
 #'
 #' When the outcome was also used to fit the vulnerability model (latent,
 #' shape and penalised methods use the outcomes), this calibration is
-#' in-sample and optimistic. For an honest assessment, calibrate against an
-#' outcome the model did not see.
+#' in-sample and optimistic. For an honest assessment, pass cross-validated
+#' scores from [ccva_cv()] (with the calibrating outcome among those
+#' hidden), or calibrate against an outcome the model did not see.
 #'
 #' @param fit A `ccva_fit`.
 #' @param outcome Outcome column (default: the first outcome). Oriented so
@@ -26,13 +27,20 @@
 #'   Vulnerable or worse on a 0--3 scale; otherwise the median.
 #' @param event Optional logical vector of events, overriding `outcome`.
 #' @param uncertainty Optional [ccva_uncertainty()] result.
+#' @param cv Optional [ccva_cv()] result. Its cross-validated scores replace
+#'   the in-sample scores, both for fitting the calibration and for the
+#'   predicted probabilities, so the calibration is out of sample for the
+#'   hidden outcomes. `uncertainty` is then ignored, because its draws are
+#'   in-sample.
 #' @param R Number of bootstrap replicates.
 #' @param level Interval coverage.
 #' @param seed Optional random seed.
 #' @return An object of class `ccva_calibration` with `units` (probability
 #'   and interval per unit), `curve` (probability across the score range),
-#'   `bins` (observed vs predicted), `metrics` (AUC, Brier score) and the
-#'   `model`.
+#'   `bins` (observed vs predicted), `metrics` (AUC, Brier score), the
+#'   `model`, and `draws` (bootstrap draws of every unit's probability, one
+#'   row per replicate), from which intervals for sums -- such as the
+#'   expected number of threatened species in a group -- can be computed.
 #' @export
 #' @examples
 #' fit <- ccva_combine(ccva_sim_data(), "weighted",
@@ -41,7 +49,7 @@
 #' cal
 ccva_calibrate <- function(fit, outcome = NULL, threshold = NULL,
                            event = NULL, uncertainty = NULL, R = 500,
-                           level = 0.95, seed = NULL) {
+                           level = 0.95, seed = NULL, cv = NULL) {
   if (!inherits(fit, "ccva_fit")) stop("`fit` must be a ccva_fit.",
                                        call. = FALSE)
   if (!is.null(seed)) set.seed(seed)
@@ -57,7 +65,7 @@ ccva_calibrate <- function(fit, outcome = NULL, threshold = NULL,
     y <- x$data[[outcome]] * d
     u <- sort(unique(y))
     if (is.null(threshold))
-      threshold <- if (length(u) <= 10) u[length(u) - 1] else stats::median(y)
+      threshold <- if (length(u) <= 10) u[length(u) - 1] else stats::median(y, na.rm = TRUE)
     event <- y >= threshold
     in_sample <- fit$method %in% c("latent", "shape", "penalised")
   } else {
@@ -65,15 +73,27 @@ ccva_calibrate <- function(fit, outcome = NULL, threshold = NULL,
                                  call. = FALSE)
     event <- as.logical(event); outcome <- "event"; in_sample <- FALSE
   }
-  if (length(unique(event)) < 2)
+  if (length(unique(event[!is.na(event)])) < 2)
     stop("The outcome defines only one class; change `threshold`.",
          call. = FALSE)
+  obs <- !is.na(event)
 
   s <- as.numeric(fit$score)
+  if (!is.null(cv)) {
+    if (!inherits(cv, "ccva_cv")) stop("`cv` must come from ccva_cv().",
+                                       call. = FALSE)
+    if (!identical(names(cv$score), names(fit$score)))
+      stop("`cv` was not computed for this fit.", call. = FALSE)
+    s <- as.numeric(cv$score)
+    if (in_sample) in_sample <- !(outcome %in% cv$hide)
+    if (!is.null(uncertainty))
+      message("`uncertainty` is ignored when `cv` is given.")
+    uncertainty <- NULL
+  }
   glm_fit <- function(sc, ev) suppressWarnings(
     stats::glm(ev ~ sc, family = stats::binomial()))
   m <- glm_fit(s, event)
-  prob <- as.numeric(stats::predict(m, type = "response"))
+  prob <- as.numeric(stats::plogis(stats::coef(m)[1] + stats::coef(m)[2] * s))
   grid <- seq(min(s), max(s), length.out = 60)
 
   draws <- if (!is.null(uncertainty)) uncertainty$draws else NULL
@@ -101,15 +121,18 @@ ccva_calibrate <- function(fit, outcome = NULL, threshold = NULL,
                       probability = stats::plogis(stats::coef(m)[1] +
                                                     stats::coef(m)[2] * grid),
                       lower = qg[1, ], upper = qg[2, ])
-  bins <- .calib_bins(prob, event)
-  auc <- .auc(s, event)
+  bins <- .calib_bins(prob[obs], event[obs])
+  auc <- .auc(s[obs], event[obs])
   structure(list(units = units, curve = curve, bins = bins,
-                 metrics = c(auc = auc, brier = mean((prob - event)^2),
-                             event_rate = mean(event),
+                 metrics = c(auc = auc,
+                             brier = mean((prob[obs] - event[obs])^2),
+                             event_rate = mean(event[obs]),
                              slope = unname(stats::coef(m)[2])),
                  model = m, outcome = outcome, threshold = threshold,
                  level = level, R = sum(ok), in_sample = in_sample,
-                 propagated = !is.null(draws), method = fit$method),
+                 propagated = !is.null(draws), method = fit$method,
+                 cross_validated = !is.null(cv),
+                 draws = `colnames<-`(P, names(fit$score))),
             class = "ccva_calibration")
 }
 
@@ -136,6 +159,8 @@ print.ccva_calibration <- function(x, ...) {
   cat(sprintf("  AUC %.3f | Brier %.3f | event rate %.2f | %d bootstrap fits%s\n",
               m[["auc"]], m[["brier"]], m[["event_rate"]], x$R,
               if (x$propagated) " (score uncertainty propagated)" else ""))
+  if (isTRUE(x$cross_validated))
+    cat("  scores: cross-validated (outcome hidden for held-out units)\n")
   if (x$in_sample)
     cat("  note: this outcome was used to fit the model; calibration is in-sample\n")
   top <- utils::head(x$units, 5)

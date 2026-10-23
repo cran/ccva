@@ -6,7 +6,7 @@
 \usage{
 ccva_combine(
   x,
-  method = c("weighted", "shape", "latent", "penalised"),
+  method = c("weighted", "shape", "latent", "penalised", "rule"),
   component_method = "mean",
   component_args = list(),
   weights = NULL,
@@ -16,6 +16,10 @@ ccva_combine(
   max_indicators = 30,
   k = NULL,
   alpha = 1,
+  formative_weights = c("equal", "estimated"),
+  ordered = NULL,
+  threshold = 0.25,
+  unknown = c("optimistic", "pessimistic"),
   cutoffs = "uniform",
   ...
 )
@@ -53,6 +57,28 @@ instead of a latent factor. Default 30.}
 \item{k}{Basis dimension for `"shape"` splines; chosen from `n` if `NULL`.}
 
 \item{alpha}{Elastic-net mixing for `"penalised"` (1 = LASSO).}
+
+\item{formative_weights}{For `"latent"`: how formative components (see
+`formative` in [as_ccva()]) enter the model. `"equal"` (default) uses
+the component score from `component_method` as a single observed
+cause; `"estimated"` enters every indicator as a cause of \eqn{V^*}
+with its own weight (a MIMIC model), sign-constrained like the
+component (non-negative for exposure and sensitivity, non-positive for
+adaptive capacity on the oriented scale). The weights are in
+`details$indicator_weights`; the standardised effect of the component is
+that of the weighted composite.}
+
+\item{ordered}{For `"latent"`: names of outcomes to treat as ordered
+categorical (e.g. an IUCN category coded 0--4), estimated by
+diagonally weighted least squares (lavaan's `"WLSMV"`). Needs complete
+data.}
+
+\item{threshold}{For `"rule"`: share of units flagged by a continuous
+indicator (default 0.25, the top quarter; the bottom quarter for
+adaptive capacity).}
+
+\item{unknown}{For `"rule"`: treatment of missing indicators,
+`"optimistic"` (not flagged, the default) or `"pessimistic"`.}
 
 \item{cutoffs}{Classification of scores into Low / Moderate / High; see
 [ccva_classify()].}
@@ -102,7 +128,30 @@ role in every model that can express them.
     (2) it is regressed on *all* indicators with a LASSO / elastic net
     (\pkg{glmnet}) whose coefficient signs follow the component and
     indicator constraints. Selects which predictors drive vulnerability.}
+  \item{`"rule"`}{The rule-based framework of Foden et al. (2013): each
+    indicator flags a unit as high (exposure, sensitivity) or low
+    (adaptive capacity) -- indicators coded 0 / 0.5 / 1 flag at their
+    risk end, continuous indicators in the top (bottom, for adaptive
+    capacity) `threshold` share -- and a component is flagged when any of
+    its indicators is. Units flagged on all components are "highly
+    vulnerable"; the other combinations give Foden's categories (high
+    latent risk, potential adapter, potential persister). The score is the
+    share of components flagged. Missing indicators are treated as
+    not flagged (`unknown = "optimistic"`) or flagged (`"pessimistic"`).
+    Use it to reproduce rule-based assessments and to see which single
+    indicators decide them (`ccva_plot(fit, "effects")`).}
 }
+}
+
+\section{Missing values}{
+
+Data built with `as_ccva(..., na_action = "keep")` may contain missing
+indicators and outcomes. The `"mean"` and `"ordinal"` component scorers
+average the observed indicators; the `"rule"` method applies `unknown`;
+the `"latent"` model uses full-information maximum likelihood, so units
+with a missing outcome (such as Data Deficient species) are scored from
+their indicators. The `"shape"` and `"penalised"` methods need complete
+data.
 Methods added with [ccva_register()] are also accepted.
 }
 
@@ -118,10 +167,28 @@ l <- ccva_combine(d, "latent",
                   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")))
 l
 cor(l$score, d$truth$V_star, method = "spearman")
+
+# Rule-based assessment (Foden et al. 2013): top quarter of each indicator
+r <- ccva_combine(d, "rule", threshold = 0.25)
+table(r$details$category)
+
+# Formative components with estimated weights, and missing values
+dm <- ccva_sim
+dm$s1_thermal[1:30] <- NA
+dm$iucn[31:60] <- NA
+xm <- as_ccva(dm, exposure = c("E1_risk", "E2_risk", "E3_risk"),
+  sensitivity = grep("^s[0-9]+_", names(dm), value = TRUE),
+  adaptive = grep("^a[0-9]+_", names(dm), value = TRUE),
+  outcomes = c("iucn", "pop_trend", "range_change"),
+  direction = c(pop_trend = -1, range_change = -1), id = "species",
+  formative = "adaptive", na_action = "keep")
+m <- ccva_combine(xm, "latent", formative_weights = "estimated")
+m$details$indicator_weights
 }
 \references{
 Ofori, B. Y. et al. (2017) *Scientific Reports* 7, 12979.
 Pya, N. and Wood, S. N. (2015) *Statistics and Computing* 25, 543--559.
+Foden, W. B. et al. (2013) *PLoS ONE* 8, e65427.
 Rosseel, Y. (2012) *Journal of Statistical Software* 48(2).
 }
 \seealso{

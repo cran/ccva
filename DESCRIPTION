@@ -2,7 +2,7 @@ Package: ccva
 Type: Package
 Title: Climate Change Vulnerability Assessment with Constrained Latent
         Models
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: 
     person("Hassan", "Doosti", email = "hassan.doosti@mq.edu.au",
            role = c("aut", "cre", "cph"),
@@ -11,11 +11,15 @@ Description: A general framework for climate change vulnerability assessment
     (CCVA) of any species and any dataset. Variables are tagged as exposure,
     sensitivity or adaptive capacity; each component is computed from its own
     predictors by a chosen method; and the three components are combined into
-    vulnerability. Methods range from the conventional weighted index of
-    Ofori et al. (2017) <doi:10.1038/s41598-017-13245-y> to shape-constrained
-    additive models ('scam'), latent-variable structural equation models
+    vulnerability. Methods range from the rule-based framework of Foden et
+    al. (2013) <doi:10.1371/journal.pone.0065427> and the conventional
+    weighted index of Ofori et al. (2017) <doi:10.1038/s41598-017-13245-y>
+    to shape-constrained additive models ('scam'), latent-variable
+    structural equation models
     ('lavaan') in which vulnerability is inferred from observable proxies,
     and penalised regression ('glmnet') for high-dimensional predictors.
+    Missing traits and outcomes are handled by full-information maximum
+    likelihood.
     Ecological knowledge enters as explicit constraints on predictors, on
     each component's role and on the links between components. Diagnostics,
     validation against observed outcomes, bootstrap and weight-based
@@ -33,8 +37,8 @@ Config/testthat/edition: 3
 LazyData: true
 RoxygenNote: 7.3.1
 NeedsCompilation: no
-Packaged: 2026-10-14 06:45:01 UTC; MQ20173444
+Packaged: 2026-10-23 04:28:36 UTC; MQ20173444
 Author: Hassan Doosti [aut, cre, cph] (affiliation: Macquarie University)
 Maintainer: Hassan Doosti <hassan.doosti@mq.edu.au>
 Repository: CRAN
-Date/Publication: 2026-10-22 16:00:02 UTC
+Date/Publication: 2026-10-23 09:10:49 UTC

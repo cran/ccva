@@ -89,7 +89,53 @@ ccva_check(d)
 Alpha rises with the number of indicators, so the mean inter-item
 correlation is reported alongside it. In the latent model a formative
 component enters as a composite of its indicators rather than as a
-reflective factor.
+reflective factor. With `formative_weights = "estimated"` every indicator
+of a formative component gets its own sign-constrained weight on latent
+vulnerability (a MIMIC model), so the data decide which facets matter:
+
+```{r}
+fw <- ccva_combine(d, "latent", formative_weights = "estimated",
+                   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")))
+fw$details$indicator_weights
+```
+
+### Incomplete trait data
+
+Real trait databases have gaps, and the species without a Red List
+category are often those that most need an assessment. Build the data with
+`na_action = "keep"`: the latent model then uses full-information maximum
+likelihood, and units with a missing outcome are scored from their
+indicators.
+
+```{r}
+dm <- ccva_sim
+dm$s1_thermal[sample(300, 40)] <- NA
+dm$iucn[1:30] <- NA                       # e.g. Data Deficient species
+xm <- as_ccva(dm, exposure = c("E1_risk", "E2_risk", "E3_risk"),
+  sensitivity = grep("^s[0-9]+_", names(dm), value = TRUE),
+  adaptive = grep("^a[0-9]+_", names(dm), value = TRUE),
+  outcomes = c("iucn", "pop_trend", "range_change"),
+  direction = c(pop_trend = -1, range_change = -1), id = "species",
+  na_action = "keep")
+fm <- ccva_combine(xm, "latent",
+                   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")))
+cor(fm$score[1:30], ccva_sim$V_star[1:30], method = "spearman")
+```
+
+### Rule-based assessments
+
+Many published assessments use the rules of Foden et al. (2013): a species
+is highly vulnerable when at least one trait flags high sensitivity, at
+least one flags low adaptive capacity and its exposure is in the top
+quarter. `method = "rule"` reproduces them and shows how many species each
+trait flags on its own -- often a large share of the classification rests
+on one trait and one threshold:
+
+```{r}
+r <- ccva_combine(d, "rule")
+r
+head(r$details$drivers[order(-r$details$drivers$n_only), ])
+```
 
 ## 4. Make the causal hypotheses explicit
 
@@ -175,8 +221,23 @@ ccva_plot(risk, "risk", n = 20)
 ```
 
 Here the outcome was also used to fit the latent model, so the
-calibration is in-sample (the print-out says so). With real data,
-calibrate against an outcome the model did not use.
+calibration is in-sample (the print-out says so). `ccva_cv()` gives honest
+scores: each fold is scored by a model fitted without it, with the
+outcomes of the held-out species hidden, as for a species that has never
+been assessed. Passing them to `ccva_calibrate()` makes the calibration
+out of sample:
+
+```{r}
+cv <- ccva_cv(fit, k = 5, seed = 1, progress = FALSE)
+cv
+ccva_calibrate(fit, outcome = "iucn", cv = cv, R = 200, seed = 1)
+```
+
+Related species are not independent replicates. Give a grouping (family,
+genus, river basin) as `cluster` to `ccva_cv()`, so that whole groups are
+held out together, and to `ccva_uncertainty()`, so that the bootstrap
+resamples groups rather than species and the intervals respect the
+dependence within them.
 
 ## 7. Spatial prioritisation
 
@@ -207,3 +268,9 @@ ccva_plot(sites)
   `ccva_thermal_margin()`.
 * A **single Bayesian model** unifying latent vulnerability, shrinkage for
   high-dimensional predictors and shape constraints remains future work.
+
+## Reference
+
+Foden, W. B. et al. (2013) Identifying the world's most climate change
+vulnerable species: a systematic trait-based assessment of all birds,
+amphibians and corals. *PLoS ONE* 8, e65427.

@@ -14,7 +14,7 @@ as_ccva(
   direction = NULL,
   coords = NULL,
   formative = NULL,
-  na_action = c("omit", "fail")
+  na_action = c("omit", "keep", "fail")
 )
 }
 \arguments{
@@ -53,8 +53,15 @@ latent model enters them as a composite (built by the component scoring
 method) instead of a reflective latent factor. Components not listed are
 reflective: their indicators are treated as interchangeable measures.}
 
-\item{na_action}{`"omit"` (default) drops rows with missing values in any
-used column, with a message; `"fail"` stops instead.}
+\item{na_action}{How to treat missing values in the indicator and
+outcome columns. `"omit"` (default) drops rows with any missing value,
+with a message; `"keep"` keeps them, for the methods that handle missing
+values (the `"mean"` and `"ordinal"` component scorers, the `"weighted"`
+and `"rule"` combinations, and the `"latent"` model, which uses
+full-information maximum likelihood); `"fail"` stops. Units with a
+missing outcome but observed indicators -- for example species listed
+as Data Deficient -- are scored by the latent model from their
+indicators.}
 }
 \value{
 An object of class `ccva_data`.

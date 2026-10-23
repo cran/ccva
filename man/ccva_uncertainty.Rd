@@ -12,7 +12,8 @@ ccva_uncertainty(
   robust = 0.05,
   score_error = TRUE,
   seed = NULL,
-  progress = interactive()
+  progress = interactive(),
+  cluster = NULL
 )
 }
 \arguments{
@@ -32,6 +33,12 @@ prediction error to the bootstrap draws (recommended).}
 \item{seed}{Optional random seed.}
 
 \item{progress}{Show a progress bar.}
+
+\item{cluster}{For `type = "bootstrap"`: optional grouping of the units
+(for example family, genus or river basin), given as the name of a
+column of the data or as a vector with one value per unit. Groups are
+resampled with replacement instead of units. Units with a missing group
+form groups of their own.}
 }
 \value{
 An object of class `ccva_uncertainty` with `summary` (one row
@@ -58,6 +65,14 @@ uncertainty are available:
   from the simplex, so the intervals show how much a ranking depends on
   the arbitrary choice of weights.
 
+Units are often not independent: related species share traits, and
+species living in the same lake or river basin share their range and
+hence their exposure. Resampling such units one at a time treats them as
+independent replicates and makes the intervals too narrow. With
+`cluster`, the bootstrap resamples whole groups (a cluster bootstrap):
+every unit of a drawn group enters the replicate, so dependence within
+groups is preserved.
+
 For each unit the result gives an interval for its score and for its
 rank; for each pair of units, the probability that one is more vulnerable
 than the other. A ranking of two units is called *robust* when that
@@ -70,5 +85,10 @@ u
 \donttest{
 ub <- ccva_uncertainty(fit, "bootstrap", R = 50, seed = 1)
 head(ub$summary)
+
+# cluster bootstrap: resample groups of related units
+grp <- rep(1:60, each = 5)
+uc <- ccva_uncertainty(fit, "bootstrap", R = 50, seed = 1, cluster = grp)
+uc
 }
 }

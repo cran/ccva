@@ -35,8 +35,15 @@
 #'   latent model enters them as a composite (built by the component scoring
 #'   method) instead of a reflective latent factor. Components not listed are
 #'   reflective: their indicators are treated as interchangeable measures.
-#' @param na_action `"omit"` (default) drops rows with missing values in any
-#'   used column, with a message; `"fail"` stops instead.
+#' @param na_action How to treat missing values in the indicator and
+#'   outcome columns. `"omit"` (default) drops rows with any missing value,
+#'   with a message; `"keep"` keeps them, for the methods that handle missing
+#'   values (the `"mean"` and `"ordinal"` component scorers, the `"weighted"`
+#'   and `"rule"` combinations, and the `"latent"` model, which uses
+#'   full-information maximum likelihood); `"fail"` stops. Units with a
+#'   missing outcome but observed indicators -- for example species listed
+#'   as Data Deficient -- are scored by the latent model from their
+#'   indicators.
 #'
 #' @return An object of class `ccva_data`.
 #' @seealso [ccva_simulate()] for data with a known latent structure.
@@ -53,7 +60,7 @@
 as_ccva <- function(data, exposure, sensitivity, adaptive = NULL,
                     outcomes = NULL, id = NULL, direction = NULL,
                     coords = NULL, formative = NULL,
-                    na_action = c("omit", "fail")) {
+                    na_action = c("omit", "keep", "fail")) {
   na_action <- match.arg(na_action)
   if (!is.data.frame(data)) stop("`data` must be a data frame.", call. = FALSE)
   data <- as.data.frame(data)
@@ -101,10 +108,23 @@ as_ccva <- function(data, exposure, sensitivity, adaptive = NULL,
     if (na_action == "fail")
       stop(sum(!cc), " row(s) have missing values in used columns.",
            call. = FALSE)
-    message("Dropping ", sum(!cc), " row(s) with missing values.")
-    data <- data[cc, , drop = FALSE]
+    if (na_action == "omit") {
+      message("Dropping ", sum(!cc), " row(s) with missing values.")
+      data <- data[cc, , drop = FALSE]
+    } else {
+      empty <- vapply(ind[lengths(ind) > 0], function(v)
+        rowSums(!is.na(data[v])) == 0,
+        logical(nrow(data)))
+      if (is.null(dim(empty))) empty <- matrix(empty, nrow = 1)
+      bad <- rowSums(empty) > 0
+      if (any(bad)) {
+        message("Dropping ", sum(bad), " row(s) with no observed indicator ",
+                "for at least one component.")
+        data <- data[!bad, , drop = FALSE]
+      }
+    }
   }
-  if (nrow(data) < 3L) stop("Need at least 3 complete rows.", call. = FALSE)
+  if (nrow(data) < 3L) stop("Need at least 3 rows.", call. = FALSE)
 
   ids <- if (is.null(id)) paste0("unit_", seq_len(nrow(data))) else
     as.character(data[[id]])
@@ -123,7 +143,8 @@ as_ccva <- function(data, exposure, sensitivity, adaptive = NULL,
     outcomes = outcomes,
     direction = dir,
     coords = coords,
-    formative = formative
+    formative = formative,
+    has_missing = anyNA(data[used])
   ), class = "ccva_data")
 }
 
@@ -144,6 +165,13 @@ print.ccva_data <- function(x, ...) {
                 if (length(x$outcomes) == 1) " " else "s",
                 .abbrev(.signed(x$outcomes, x$direction))))
   else cat("  Outcomes: none (latent and validation steps unavailable)\n")
+  if (isTRUE(x$has_missing)) {
+    used <- c(unlist(x$indicators), x$outcomes)
+    cat(sprintf("  Missing values: %d of %d cells (%.1f%%); %d unit(s) with a missing outcome\n",
+                sum(is.na(x$data[used])), length(used) * nrow(x$data),
+                100 * mean(is.na(x$data[used])),
+                if (length(x$outcomes)) sum(!stats::complete.cases(x$data[x$outcomes])) else 0L))
+  }
   cat("  (-) marks indicators where a higher value means less of the",
       "component.\n")
   invisible(x)
@@ -157,10 +185,11 @@ summary.ccva_data <- function(object, ...) {
     d <- object$data[v]
     data.frame(component = cmp, indicator = v,
                direction = unname(object$direction[v]),
-               mean = vapply(d, mean, numeric(1)),
-               sd = vapply(d, stats::sd, numeric(1)),
-               min = vapply(d, min, numeric(1)),
-               max = vapply(d, max, numeric(1)),
+               n_missing = vapply(d, function(v) sum(is.na(v)), numeric(1)),
+               mean = vapply(d, mean, numeric(1), na.rm = TRUE),
+               sd = vapply(d, stats::sd, numeric(1), na.rm = TRUE),
+               min = vapply(d, min, numeric(1), na.rm = TRUE),
+               max = vapply(d, max, numeric(1), na.rm = TRUE),
                row.names = NULL)
   })
   do.call(rbind, rows)
@@ -232,7 +261,8 @@ summary.ccva_data <- function(object, ...) {
   invisible(x)
 }
 
-.rescale01 <- function(v, lo = min(v), hi = max(v)) {
+.rescale01 <- function(v, lo = min(v, na.rm = TRUE),
+                       hi = max(v, na.rm = TRUE)) {
   if (hi - lo < .Machine$double.eps) return(rep(0.5, length(v)))
   (v - lo) / (hi - lo)
 }

@@ -18,16 +18,19 @@
 #' | | `"scores"` | vulnerability distribution with class cut-offs |
 #' | | `"ranking"` | most and least vulnerable units with their components |
 #' | | `"contributions"` | how each component pushes each unit's score (weighted) |
-#' | | `"effects"` | shape curves, latent loadings or penalised coefficients |
+#' | | `"effects"` | shape curves, latent loadings and weights, penalised coefficients, or rule drivers |
 #' | | `"map"` | vulnerability over coordinates |
 #' | `ccva_comparison` | `"truth"` | each method against the true vulnerability |
 #' | | `"ranks"` | rank of each unit under two methods |
 #' | | `"validation"` | correlation of each method with each target |
 #' | `ccva_uncertainty` | `"intervals"` | score intervals, ranked |
 #' | | `"pairwise"` | probability one unit is more vulnerable than another |
+#' | `ccva_cv` | `"validation"` | in-sample vs cross-validated agreement with each outcome |
+#' | | `"scores"` | cross-validated scores by fold |
 #'
 #' @param object A `ccva_data`, `ccva_check`, `ccva_component`, `ccva_fit`,
-#'   `ccva_comparison` or `ccva_uncertainty` object.
+#'   `ccva_comparison`, `ccva_uncertainty`, `ccva_calibration`, `ccva_sites`
+#'   or `ccva_cv` object.
 #' @param type Figure type (see table). `NULL` gives the first listed.
 #' @param n For rankings and interval plots, the number of units shown at
 #'   each end (`"ranking"`) or in total (`"intervals"`, `"pairwise"`).
@@ -135,6 +138,7 @@ ccva_plot.ccva_data <- function(object, type = NULL, n = 15, ...) {
     long <- data.frame(indicator = rep(vars, each = nrow(Z)),
                        component = rep(grp, each = nrow(Z)),
                        value = as.numeric(Z))
+    long <- long[!is.na(long$value), ]
     long$indicator <- factor(long$indicator, levels = rev(vars))
     long$component <- factor(long$component, levels = comps)
     return(
@@ -152,7 +156,7 @@ ccva_plot.ccva_data <- function(object, type = NULL, n = 15, ...) {
   }
   allv <- c(vars, x$outcomes)
   M <- sweep(as.matrix(x$data[allv]), 2, x$direction[allv], `*`)
-  R <- stats::cor(M, method = "spearman")
+  R <- stats::cor(M, method = "spearman", use = "pairwise.complete.obs")
   lv <- allv
   df <- data.frame(var1 = factor(rep(lv, length(lv)), levels = lv),
                    var2 = factor(rep(lv, each = length(lv)), levels = rev(lv)),
@@ -290,7 +294,8 @@ ccva_plot.ccva_fit <- function(object, type = NULL, n = 15, ...) {
 
 .method_label <- function(fit) {
   c(weighted = "Weighted index", shape = "Shape-constrained model",
-    latent = "Latent SEM", penalised = "Penalised two-stage")[[fit$method]] %||%
+    latent = "Latent SEM", penalised = "Penalised two-stage",
+    rule = "Rule-based (Foden et al. 2013)")[[fit$method]] %||%
     fit$method
 }
 
@@ -329,6 +334,14 @@ ccva_plot.ccva_fit <- function(object, type = NULL, n = 15, ...) {
       vapply(comps, function(cmp) {
         b <- cf$coef[cf$component == cmp]
         sprintf("%d of %d selected", sum(b != 0), length(b))
+      }, character(1))
+    },
+    rule = {
+      fl <- fit$details$flags
+      vapply(comps, function(cmp) {
+        if (!cmp %in% colnames(fl)) return("not used")
+        sprintf("%s: %d", if (cmp == "adaptive") "low" else "high",
+                sum(fl[, cmp]))
       }, character(1))
     },
     rep("", length(comps)))
@@ -565,6 +578,11 @@ ccva_plot.ccva_fit <- function(object, type = NULL, n = 15, ...) {
                 Vuln = "vulnerability")
       ld$component <- fmap[ld$factor]
       ld <- ld[!is.na(ld$component), ]
+      wt <- fit$details$indicator_weights
+      if (!is.null(wt) && nrow(wt))
+        ld <- rbind(ld[c("indicator", "std", "component")],
+                    data.frame(indicator = wt$indicator, std = wt$std,
+                               component = wt$component))
       ld$component <- factor(ld$component, levels = c(names(fit$components),
                                                       "vulnerability"))
       ld <- ld[order(ld$component, ld$std), ]
@@ -577,9 +595,11 @@ ccva_plot.ccva_fit <- function(object, type = NULL, n = 15, ...) {
         ggplot2::facet_grid(component ~ ., scales = "free_y", space = "free_y",
                             labeller = ggplot2::as_labeller(.ccva_labels)) +
         .comp_scale() +
-        ggplot2::labs(title = "Measurement model: how each indicator reflects its latent component",
-                      subtitle = "Standardised loadings on the oriented scale (sign-constrained by default)",
-                      x = "Standardised loading", y = NULL) +
+        ggplot2::labs(title = "Measurement model: how each indicator enters its component",
+                      subtitle = if (is.null(wt)) "Standardised loadings on the oriented scale (sign-constrained by default)" else
+                        "Standardised loadings (reflective) and weights on V* (formative); sign-constrained by default",
+                      x = if (is.null(wt)) "Standardised loading" else
+                        "Standardised loading or weight", y = NULL) +
         theme_ccva() + ggplot2::theme(legend.position = "none")
     },
     penalised = {
@@ -606,6 +626,33 @@ ccva_plot.ccva_fit <- function(object, type = NULL, n = 15, ...) {
         theme_ccva()
     },
     weighted = .plot_contributions(fit, 10),
+    rule = {
+      dr <- fit$details$drivers
+      dr <- dr[order(dr$component, dr$n_flagged), ]
+      dr$indicator <- factor(dr$indicator, levels = unique(dr$indicator))
+      long <- rbind(
+        data.frame(indicator = dr$indicator, component = dr$component,
+                   what = "flagged by this indicator", n = dr$n_flagged),
+        data.frame(indicator = dr$indicator, component = dr$component,
+                   what = "flagged by this indicator only", n = dr$n_only))
+      long$component <- factor(long$component, levels = .ccva_components)
+      ggplot2::ggplot(long, ggplot2::aes(n, indicator, fill = component,
+                                         alpha = what)) +
+        ggplot2::geom_col(position = "identity", width = 0.7) +
+        ggplot2::scale_alpha_manual(values = c(0.35, 1), name = NULL) +
+        ggplot2::facet_grid(component ~ ., scales = "free_y", space = "free_y",
+                            labeller = ggplot2::as_labeller(c(
+                              exposure = "Exposure",
+                              sensitivity = "Sensitivity",
+                              adaptive = "Adaptive\ncapacity"))) +
+        .comp_scale("fill") + ggplot2::guides(fill = "none") +
+        ggplot2::labs(title = "Which indicators drive the rule-based assessment",
+                      subtitle = sprintf("Units flagged by each indicator; dark = the only indicator flagging its component (unknowns %s)",
+                                         fit$details$unknown),
+                      x = "Number of units", y = NULL) +
+        theme_ccva() + ggplot2::theme(legend.position = "bottom",
+                                      strip.text.y = ggplot2::element_text(angle = 0, hjust = 0))
+    },
     stop("No effects plot for method '", fit$method, "'.", call. = FALSE))
 }
 
@@ -770,7 +817,7 @@ ccva_plot.ccva_calibration <- function(object, type = NULL, n = 25, ...) {
   type <- match.arg(type %||% "curve", c("curve", "risk", "reliability"))
   lab <- sprintf("P(%s >= %s)", object$outcome, format(object$threshold))
   if (type == "curve") {
-    u <- object$units
+    u <- object$units[!is.na(object$units$event), ]
     u$y <- ifelse(u$event, 1, 0)
     return(
       ggplot2::ggplot(object$curve, ggplot2::aes(score, probability)) +
@@ -873,4 +920,37 @@ ccva_plot.ccva_sites <- function(object, type = NULL, n = 25, ...) {
     ggplot2::geom_label(..., linewidth = 0)
   else
     ggplot2::geom_label(..., label.size = 0)
+}
+
+## ccva_cv ------------------------------------------------------------------------
+
+#' @export
+ccva_plot.ccva_cv <- function(object, type = NULL, n = 15, ...) {
+  type <- match.arg(type %||% "validation", c("validation", "scores"))
+  if (type == "validation") {
+    v <- object$validation
+    long <- rbind(data.frame(outcome = v$outcome, fit = "in-sample",
+                             rho = v$in_sample),
+                  data.frame(outcome = v$outcome, fit = "cross-validated",
+                             rho = v$cross_validated))
+    long$fit <- factor(long$fit, levels = c("in-sample", "cross-validated"))
+    return(
+      ggplot2::ggplot(long, ggplot2::aes(rho, outcome, colour = fit)) +
+        ggplot2::geom_vline(xintercept = 0, colour = "#9a9a94") +
+        ggplot2::geom_point(size = 3) +
+        ggplot2::scale_colour_manual(values = c("#9a9a94",
+                                                ccva_colours[["vulnerability"]]),
+                                     name = NULL) +
+        ggplot2::labs(title = "Agreement with each outcome, in sample and out of sample",
+                      subtitle = sprintf("%d-fold cross-validation; outcomes hidden for held-out units",
+                                         object$k),
+                      x = "Spearman correlation", y = NULL) +
+        theme_ccva() + ggplot2::theme(legend.position = "bottom"))
+  }
+  df <- data.frame(cv = object$score, fold = factor(object$fold))
+  ggplot2::ggplot(df, ggplot2::aes(fold, cv)) +
+    ggplot2::geom_boxplot(fill = ccva_colours[["vulnerability"]], alpha = 0.3) +
+    ggplot2::labs(title = "Cross-validated scores by fold",
+                  x = "Fold", y = "Cross-validated vulnerability") +
+    theme_ccva()
 }

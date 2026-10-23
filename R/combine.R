@@ -35,7 +35,28 @@
 #'     (2) it is regressed on *all* indicators with a LASSO / elastic net
 #'     (\pkg{glmnet}) whose coefficient signs follow the component and
 #'     indicator constraints. Selects which predictors drive vulnerability.}
+#'   \item{`"rule"`}{The rule-based framework of Foden et al. (2013): each
+#'     indicator flags a unit as high (exposure, sensitivity) or low
+#'     (adaptive capacity) -- indicators coded 0 / 0.5 / 1 flag at their
+#'     risk end, continuous indicators in the top (bottom, for adaptive
+#'     capacity) `threshold` share -- and a component is flagged when any of
+#'     its indicators is. Units flagged on all components are "highly
+#'     vulnerable"; the other combinations give Foden's categories (high
+#'     latent risk, potential adapter, potential persister). The score is the
+#'     share of components flagged. Missing indicators are treated as
+#'     not flagged (`unknown = "optimistic"`) or flagged (`"pessimistic"`).
+#'     Use it to reproduce rule-based assessments and to see which single
+#'     indicators decide them (`ccva_plot(fit, "effects")`).}
 #' }
+#'
+#' @section Missing values:
+#' Data built with `as_ccva(..., na_action = "keep")` may contain missing
+#' indicators and outcomes. The `"mean"` and `"ordinal"` component scorers
+#' average the observed indicators; the `"rule"` method applies `unknown`;
+#' the `"latent"` model uses full-information maximum likelihood, so units
+#' with a missing outcome (such as Data Deficient species) are scored from
+#' their indicators. The `"shape"` and `"penalised"` methods need complete
+#' data.
 #' Methods added with [ccva_register()] are also accepted.
 #'
 #' @param x A `ccva_data` object.
@@ -60,6 +81,24 @@
 #'   instead of a latent factor. Default 30.
 #' @param k Basis dimension for `"shape"` splines; chosen from `n` if `NULL`.
 #' @param alpha Elastic-net mixing for `"penalised"` (1 = LASSO).
+#' @param formative_weights For `"latent"`: how formative components (see
+#'   `formative` in [as_ccva()]) enter the model. `"equal"` (default) uses
+#'   the component score from `component_method` as a single observed
+#'   cause; `"estimated"` enters every indicator as a cause of \eqn{V^*}
+#'   with its own weight (a MIMIC model), sign-constrained like the
+#'   component (non-negative for exposure and sensitivity, non-positive for
+#'   adaptive capacity on the oriented scale). The weights are in
+#'   `details$indicator_weights`; the standardised effect of the component is
+#'   that of the weighted composite.
+#' @param ordered For `"latent"`: names of outcomes to treat as ordered
+#'   categorical (e.g. an IUCN category coded 0--4), estimated by
+#'   diagonally weighted least squares (lavaan's `"WLSMV"`). Needs complete
+#'   data.
+#' @param threshold For `"rule"`: share of units flagged by a continuous
+#'   indicator (default 0.25, the top quarter; the bottom quarter for
+#'   adaptive capacity).
+#' @param unknown For `"rule"`: treatment of missing indicators,
+#'   `"optimistic"` (not flagged, the default) or `"pessimistic"`.
 #' @param cutoffs Classification of scores into Low / Moderate / High; see
 #'   [ccva_classify()].
 #' @param ... Passed to registered combine methods.
@@ -71,6 +110,7 @@
 #' @references
 #' Ofori, B. Y. et al. (2017) *Scientific Reports* 7, 12979.
 #' Pya, N. and Wood, S. N. (2015) *Statistics and Computing* 25, 543--559.
+#' Foden, W. B. et al. (2013) *PLoS ONE* 8, e65427.
 #' Rosseel, Y. (2012) *Journal of Statistical Software* 48(2).
 #' @seealso [ccva()], [ccva_compare()], [ccva_uncertainty()], [ccva_plot()]
 #' @export
@@ -86,21 +126,48 @@
 #'                   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")))
 #' l
 #' cor(l$score, d$truth$V_star, method = "spearman")
+#'
+#' # Rule-based assessment (Foden et al. 2013): top quarter of each indicator
+#' r <- ccva_combine(d, "rule", threshold = 0.25)
+#' table(r$details$category)
+#'
+#' # Formative components with estimated weights, and missing values
+#' dm <- ccva_sim
+#' dm$s1_thermal[1:30] <- NA
+#' dm$iucn[31:60] <- NA
+#' xm <- as_ccva(dm, exposure = c("E1_risk", "E2_risk", "E3_risk"),
+#'   sensitivity = grep("^s[0-9]+_", names(dm), value = TRUE),
+#'   adaptive = grep("^a[0-9]+_", names(dm), value = TRUE),
+#'   outcomes = c("iucn", "pop_trend", "range_change"),
+#'   direction = c(pop_trend = -1, range_change = -1), id = "species",
+#'   formative = "adaptive", na_action = "keep")
+#' m <- ccva_combine(xm, "latent", formative_weights = "estimated")
+#' m$details$indicator_weights
 ccva_combine <- function(x, method = c("weighted", "shape", "latent",
-                                       "penalised"),
+                                       "penalised", "rule"),
                          component_method = "mean", component_args = list(),
                          weights = NULL, constraints = NULL,
                          response = NULL, shared_error = NULL,
                          max_indicators = 30, k = NULL, alpha = 1,
+                         formative_weights = c("equal", "estimated"),
+                         ordered = NULL, threshold = 0.25,
+                         unknown = c("optimistic", "pessimistic"),
                          cutoffs = "uniform", ...) {
   .check_ccva(x)
+  formative_weights <- match.arg(formative_weights)
+  unknown <- match.arg(unknown)
   args <- list(method = if (is.character(method)) method[1] else method,
                component_method = component_method,
                component_args = component_args, weights = weights,
                constraints = constraints, response = response,
                shared_error = shared_error, max_indicators = max_indicators,
-               k = k, alpha = alpha, cutoffs = cutoffs, ...)
+               k = k, alpha = alpha, formative_weights = formative_weights,
+               ordered = ordered, threshold = threshold, unknown = unknown,
+               cutoffs = cutoffs, ...)
   method <- args$method
+  if (method %in% c("shape", "penalised") && isTRUE(x$has_missing))
+    .no_missing(x$data[c(unlist(x$indicators), x$outcomes)],
+                sprintf("method = \"%s\"", method))
   if (is.null(constraints)) constraints <- ccva_default_constraints()
   cons <- .resolve_constraints(constraints, x)
   comps <- .active_components(x)
@@ -123,7 +190,7 @@ ccva_combine <- function(x, method = c("weighted", "shape", "latent",
     notes <- c(notes, "constrain_shape() applies only to method = \"shape\" and was not used")
   link_info <- NULL
   if (length(cons$links) && method != "latent") {
-    if (method == "penalised") {
+    if (method %in% c("penalised", "rule")) {
       notes <- c(notes, "component links are not used by the penalised model (it works on indicators)")
     } else {
       lk <- .two_stage_links(components, cons$links)
@@ -141,8 +208,9 @@ ccva_combine <- function(x, method = c("weighted", "shape", "latent",
     weighted = .comb_weighted(cs, comps, weights, cons, components),
     shape = .comb_shape(x, cs, comps, cons, response, k, components),
     latent = .comb_latent(x, components, comps, cons, shared_error,
-                          max_indicators),
+                          max_indicators, formative_weights, ordered),
     penalised = .comb_penalised(x, comps, cons, alpha),
+    rule = .comb_rule(x, comps, cons, threshold, unknown),
     {
       reg <- .ccva_registry$combine[[method]]
       if (is.null(reg))
@@ -157,12 +225,18 @@ ccva_combine <- function(x, method = c("weighted", "shape", "latent",
 
   score <- stats::setNames(.rescale01(as.numeric(res$score)), x$id)
   lo <- min(res$score); hi <- max(res$score)
-  if (method == "weighted") {
-    # the weighted index is already on its natural [0, 1] scale
+  if (method %in% c("weighted", "rule")) {
+    # the weighted index and the rule score are on their natural [0, 1] scale
     score <- stats::setNames(as.numeric(res$score), x$id)
     lo <- 0; hi <- 1
   }
-  cls <- ccva_classify(score, cutoffs, data = x)
+  cls <- if (method == "rule" && identical(cutoffs, "uniform")) {
+    # all components flagged = High; all but one = Moderate
+    k <- ncol(res$details$flags)
+    nf <- round(score * k)
+    factor(ifelse(nf == k, "High", ifelse(nf == k - 1, "Moderate", "Low")),
+           levels = c("Low", "Moderate", "High"))
+  } else ccva_classify(score, cutoffs, data = x)
 
   fit <- structure(list(
     data = x, method = method, args = args,
@@ -230,7 +304,8 @@ ccva <- function(data, method = "latent", ...) {
 #' @export
 print.ccva_fit <- function(x, ...) {
   lab <- c(weighted = "weighted index", shape = "shape-constrained",
-           latent = "latent SEM", penalised = "penalised two-stage")
+           latent = "latent SEM", penalised = "penalised two-stage",
+           rule = "rule-based (Foden et al. 2013)")
   m <- if (x$method %in% names(lab)) lab[[x$method]] else x$method
   cat(sprintf("<ccva_fit> %s | %d units | constraints: %d rule(s)\n", m,
               length(x$score), x$constraints$n_rules))
@@ -240,6 +315,15 @@ print.ccva_fit <- function(x, ...) {
   tb <- table(x$class)
   cat("  classes:   ", paste(sprintf("%s %d", names(tb), tb),
                              collapse = " | "), "\n")
+  if (!is.null(x$details$category)) {
+    tc <- table(x$details$category)
+    cat("  categories:", paste(sprintf("%s %d", names(tc), tc),
+                               collapse = " | "), "\n")
+    fl <- x$details$flags
+    cat("  flagged:   ", paste(sprintf("%s %d", .rule_flag_label(colnames(fl)),
+                                       colSums(fl)), collapse = " | "),
+        sprintf("(unknowns treated as %s)\n", x$details$unknown))
+  }
   if (!is.null(x$details$fit_measures)) {
     fm <- x$details$fit_measures
     cat(sprintf("  fit: CFI %.3f, TLI %.3f, RMSEA %.3f, SRMR %.3f%s\n",
@@ -251,6 +335,18 @@ print.ccva_fit <- function(x, ...) {
     cat("  effects on V*:", paste(sprintf("%s %+.2f", e$component,
                                           e$std), collapse = ", "),
         "(standardised)\n")
+  }
+  if (!is.null(x$details$indicator_weights)) {
+    wt <- x$details$indicator_weights
+    for (cmp in unique(wt$component)) {
+      w <- wt[wt$component == cmp, ]
+      w <- w[order(-abs(w$std)), ]
+      nz <- sum(abs(w$std) >= 0.005)
+      cat(sprintf("  %s weights: %d of %d non-zero; largest %s\n", cmp, nz,
+                  nrow(w), paste(sprintf("%s %+.2f", w$indicator[seq_len(min(3, nz))],
+                                         w$std[seq_len(min(3, nz))]),
+                                 collapse = ", ")))
+    }
   }
   if (!is.null(x$details$links)) {
     lk <- x$details$links
@@ -414,7 +510,9 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   }
   fml <- stats::as.formula(paste(".y ~", paste(terms, collapse = " + ")))
   fit <- scam::scam(fml, data = df)
-  sc <- as.numeric(stats::fitted(fit))
+  # score from the coefficients, exactly as predict() computes it: fitted
+  # values stored by scam can differ from X %*% beta on some platforms
+  sc <- as.numeric(stats::predict(fit, newdata = df))
 
   # partial effect curves for plotting (others at their mean)
   curves <- do.call(rbind, lapply(used, function(cmp) {
@@ -448,7 +546,8 @@ ccva_rank <- function(fit, uncertainty = NULL) {
 .lv_name <- function(v) paste0("l_", gsub("[^A-Za-z0-9]", "_", v))
 
 .comb_latent <- function(x, components, comps, cons, shared_error,
-                         max_indicators) {
+                         max_indicators, formative_weights = "equal",
+                         ordered = NULL) {
   if (!is.null(cons$moderator))
     stop("The latent SEM cannot express adaptive capacity as a moderator. ",
          "Use method = \"shape\" (interaction surfaces) or \"weighted\".",
@@ -459,11 +558,20 @@ ccva_rank <- function(fit, uncertainty = NULL) {
          call. = FALSE)
   n <- length(x$id)
 
-  # oriented, standardised data
+  if (!is.null(ordered)) {
+    bad <- setdiff(ordered, outs)
+    if (length(bad))
+      stop("`ordered` must name outcome columns; not outcomes: ",
+           paste(bad, collapse = ", "), call. = FALSE)
+  }
+  # oriented, standardised data (ordered outcomes keep their categories)
   cols <- c(unlist(x$indicators[comps]), outs)
   D <- sweep(as.matrix(x$data[cols]), 2, x$direction[cols], `*`)
-  mu <- colMeans(D); sdv <- apply(D, 2, stats::sd); sdv[sdv == 0] <- 1
+  mu <- colMeans(D, na.rm = TRUE)
+  sdv <- apply(D, 2, stats::sd, na.rm = TRUE); sdv[!(sdv > 0)] <- 1
+  mu[ordered] <- 0; sdv[ordered] <- 1
   Z <- as.data.frame(sweep(sweep(D, 2, mu), 2, sdv, `/`))
+  est_formative <- list()
 
   lines <- character(0); ineq <- character(0); notes <- character(0)
   observed_comp <- character(0)
@@ -488,6 +596,17 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   for (cmp in comps) {
     vars <- components[[cmp]]$indicators
     lv <- .ccva_latent[[cmp]]
+    if (cmp %in% x$formative && formative_weights == "estimated") {
+      # MIMIC: every indicator is a cause of V* with its own weight
+      est_formative[[cmp]] <- vars
+      observed_comp <- c(observed_comp, cmp)
+      notes <- c(notes, sprintf(
+        "%s is formative: %d indicator weights estimated%s",
+        cmp, length(vars),
+        if (is.na(cons$comp_sign[[cmp]])) "" else " (sign-constrained)"))
+      struct_rhs <- c(struct_rhs, lv)
+      next
+    }
     if (cmp %in% x$formative || length(vars) < 2 ||
         length(vars) > max_indicators) {
       Z[[lv]] <- as.numeric(scale(components[[cmp]]$score))
@@ -516,7 +635,8 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   latent_comps <- .ccva_latent[setdiff(comps, observed_comp)]
   if (!is.null(shared_error)) {
     for (i in seq_along(shared_error)) {
-      g <- intersect(shared_error[[i]], names(Z))
+      g <- setdiff(intersect(shared_error[[i]], names(Z)),
+                   unlist(est_formative))
       if (length(g) < 2) next
       mf <- paste0("Shared", i)
       lines <- c(lines,
@@ -530,9 +650,28 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   }
   # structural paths
   sterms <- character(0)
+  weight_labels <- list()
   for (j in seq_along(comps)) {
     cmp <- comps[j]; lv <- struct_rhs[j]
     fx <- cons$comp_fixed[[cmp]]
+    if (cmp %in% names(est_formative)) {
+      if (!is.null(fx) && fx == 0) next
+      csg <- cons$comp_sign[[cmp]]
+      for (v in est_formative[[cmp]]) {
+        if (!is.null(cons$ind_fixed[[v]]) && cons$ind_fixed[[v]] == 0) next
+        lab <- paste0("g_", gsub("[^A-Za-z0-9]", "_", v))
+        for (g in cons$equal) if (v %in% g)
+          lab <- paste0("g_", gsub("[^A-Za-z0-9]", "_",
+                                   paste(g, collapse = "_eq_")))
+        isg <- cons$ind_sign[[v]]
+        sg <- csg * (if (is.na(isg)) NA else isg)
+        if (!is.na(sg)) ineq <- c(ineq, sprintf("%s %s 0", lab,
+                                                if (sg > 0) ">" else "<"))
+        sterms <- c(sterms, sprintf("%s*%s", lab, v))
+        weight_labels[[v]] <- c(component = cmp, label = lab)
+      }
+      next
+    }
     if (!is.null(fx)) {
       if (fx != 0) sterms <- c(sterms, sprintf("%s*%s", fx, lv))
       next
@@ -554,6 +693,11 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   linked_pairs <- character(0)
   defs <- character(0)
   for (l in cons$links) {
+    if (any(c(l$from, l$to) %in% names(est_formative)))
+      stop("Links cannot involve a formative component with estimated ",
+           "weights (", paste(intersect(c(l$from, l$to),
+                                        names(est_formative)),
+                              collapse = ", "), ").", call. = FALSE)
     klab <- sprintf("k_%s_%s", l$from, l$to)
     lines <- c(lines, sprintf("%s ~ %s*%s", lv_of[[l$to]], klab,
                               lv_of[[l$from]]))
@@ -577,13 +721,35 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   ineq <- c(ineq, defs)
   model <- paste(c(lines, unique(ineq)), collapse = "\n")
 
-  fit <- .lavaan_fit(model, Z)
+  exo <- c(unlist(est_formative), .ccva_latent[observed_comp])
+  exo <- intersect(exo, names(Z))
+  used_cols <- intersect(c(cols, .ccva_latent[observed_comp]), names(Z))
+  if (!is.null(ordered) && anyNA(Z[used_cols]))
+    stop("Ordered outcomes need complete data (factor scores cannot be ",
+         "computed for incomplete units). Use as_ccva(..., na_action = ",
+         "\"omit\"), or treat the outcomes as numeric, which uses ",
+         "full-information maximum likelihood.", call. = FALSE)
+  missing <- if (!anyNA(Z[used_cols])) "listwise" else
+    if (anyNA(Z[exo])) "ml.x" else "ml"
+  # refits inside ccva_cv() must score units whose outcomes are hidden,
+  # which needs a model estimated with the missing-data machinery (on
+  # complete data this gives the same estimates as listwise ML)
+  if (missing == "listwise" && is.null(ordered) &&
+      isTRUE(getOption("ccva.force_fiml", FALSE)))
+    missing <- if (length(exo)) "ml.x" else "ml"
+  if (missing != "listwise")
+    notes <- c(notes, sprintf("missing values: %s", switch(missing,
+      ml = "full-information maximum likelihood",
+      ml.x = "full-information maximum likelihood (including predictors)")))
+  fit <- .lavaan_fit(model, Z, missing = missing, ordered = ordered)
   conv <- lavaan::lavInspect(fit, "converged")
   if (!conv) notes <- c(notes, "lavaan did not converge; treat results with caution")
 
   anchor <- .anchor(x, NULL)
-  lat <- tryCatch(lavaan::lavPredict(fit, se = "standard"),
-                  error = function(e) lavaan::lavPredict(fit))
+  lat <- if (is.null(ordered))
+    tryCatch(lavaan::lavPredict(fit, se = "standard"),
+             error = function(e) lavaan::lavPredict(fit)) else
+    lavaan::lavPredict(fit)
   score_se <- NULL
   if (vname == "Vuln" && !is.null(attr(lat, "se"))) {
     se <- attr(lat, "se")[[1]]
@@ -591,14 +757,45 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   }
   vs <- if (vname == "Vuln") as.numeric(lat[, "Vuln"]) else Z[[vname]]
   flip <- FALSE
-  if (stats::cor(vs, anchor) < 0) { vs <- -vs; flip <- TRUE }
+  if (isTRUE(stats::cor(vs, anchor, use = "pairwise.complete.obs") < 0)) {
+    vs <- -vs; flip <- TRUE
+  }
 
   pe <- lavaan::parameterEstimates(fit, standardized = TRUE)
   st <- pe[pe$op == "~" & pe$lhs == vname, ]
-  effects <- data.frame(component = comps[match(st$rhs, struct_rhs)],
-                        estimate = st$est, se = st$se,
-                        std = st$std.all, pvalue = st$pvalue,
+  st_c <- st[st$rhs %in% struct_rhs, ]
+  effects <- data.frame(component = comps[match(st_c$rhs, struct_rhs)],
+                        estimate = st_c$est, se = st_c$se,
+                        std = st_c$std.all, pvalue = st_c$pvalue,
                         row.names = NULL)
+  weights_tab <- NULL; composite_scores <- list()
+  if (length(est_formative)) {
+    wv <- names(weight_labels)
+    wst <- st[match(wv, st$rhs), ]
+    weights_tab <- data.frame(
+      component = vapply(weight_labels, `[[`, character(1), "component"),
+      indicator = wv, estimate = wst$est, se = wst$se, std = wst$std.all,
+      pvalue = wst$pvalue, row.names = NULL)
+    var_v <- if (vname == "Vuln")
+      lavaan::lavInspect(fit, "cov.lv")["Vuln", "Vuln"] else
+      stats::var(Z[[vname]], na.rm = TRUE)
+    for (cmp in unique(weights_tab$component)) {
+      w <- weights_tab[weights_tab$component == cmp, ]
+      Sxx <- stats::cov(Z[w$indicator], use = "pairwise.complete.obs")
+      Sxx[is.na(Sxx)] <- 0
+      g <- w$estimate
+      sd_c <- sqrt(max(0, as.numeric(t(g) %*% Sxx %*% g)))
+      sgn <- cons$comp_sign[[cmp]]
+      sgn <- if (is.na(sgn)) sign(sum(g)) else sgn
+      Zc <- as.matrix(Z[w$indicator]); Zc[is.na(Zc)] <- 0
+      composite_scores[[cmp]] <- as.numeric(Zc %*% g) * sgn
+      effects <- rbind(effects, data.frame(
+        component = cmp, estimate = NA_real_, se = NA_real_,
+        std = sgn * sd_c / sqrt(var_v), pvalue = NA_real_))
+    }
+    effects <- effects[order(match(effects$component, comps)), ]
+    rownames(effects) <- NULL
+  }
   link_tab <- NULL; total_tab <- NULL
   if (length(cons$links)) {
     link_tab <- do.call(rbind, lapply(cons$links, function(l) {
@@ -630,13 +827,19 @@ ccva_rank <- function(fit, uncertainty = NULL) {
   loadings <- data.frame(factor = ld$lhs, indicator = ld$rhs,
                          estimate = ld$est, std = ld$std.all,
                          row.names = NULL)
-  fm <- tryCatch(lavaan::fitMeasures(fit, c("cfi", "tli", "rmsea", "srmr")),
+  fm <- if (!.ccva_light()) tryCatch(lavaan::fitMeasures(fit, c("cfi", "tli", "rmsea", "srmr")),
                  error = function(e) c(cfi = NA, tli = NA, rmsea = NA,
-                                       srmr = NA))
+                                       srmr = NA)) else
+    c(cfi = NA, tli = NA, rmsea = NA, srmr = NA)
   latent_scores <- NULL
   if (length(latent_comps)) {
     latent_scores <- as.data.frame(lat[, latent_comps, drop = FALSE])
     names(latent_scores) <- names(latent_comps)
+  }
+  if (length(composite_scores)) {
+    cs_df <- as.data.frame(composite_scores)
+    latent_scores <- if (is.null(latent_scores)) cs_df else
+      cbind(latent_scores, cs_df)
   }
 
   list(score = vs, model = fit,
@@ -647,7 +850,9 @@ ccva_rank <- function(fit, uncertainty = NULL) {
                       score_se = score_se, links = link_tab,
                       total_effects = total_tab,
                       n_inequality = length(unique(ineq)),
-                      observed_components = observed_comp),
+                      observed_components = observed_comp,
+                      indicator_weights = weights_tab, missing = missing,
+                      ordered = ordered),
        notes = notes,
        predict = function(newdata) {
          Dn <- sweep(as.matrix(newdata[cols]), 2, x$direction[cols], `*`)
@@ -663,10 +868,18 @@ ccva_rank <- function(fit, uncertainty = NULL) {
        })
 }
 
-.lavaan_fit <- function(model, data) {
+# Bootstrap refits skip fit measures (and the saturated and baseline models
+# they need), which dominate the cost of FIML fits.
+.ccva_light <- function() isTRUE(getOption("ccva.light_refit", FALSE))
+
+.lavaan_fit <- function(model, data, missing = "listwise", ordered = NULL) {
   warn <- character(0)
+  est <- if (is.null(ordered)) "ML" else "WLSMV"
+  light <- .ccva_light()
   fit <- withCallingHandlers(
-    lavaan::sem(model, data = data, std.lv = TRUE, estimator = "ML",
+    lavaan::sem(model, data = data, std.lv = TRUE, estimator = est,
+                missing = missing, ordered = ordered,
+                h1 = !light, baseline = !light,
                 control = list(iter.max = 5000)),
     warning = function(w) {
       warn <<- c(warn, conditionMessage(w))

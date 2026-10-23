@@ -172,7 +172,7 @@ print.ccva_component <- function(x, ...) {
                                call. = FALSE)
       b
     } else {
-      stats::quantile(raw[, v], c(1 / 3, 2 / 3), names = FALSE)
+      stats::quantile(raw[, v], c(1 / 3, 2 / 3), names = FALSE, na.rm = TRUE)
     }
   })
   names(cuts) <- vars
@@ -185,7 +185,7 @@ print.ccva_component <- function(x, ...) {
   sc <- function(R) {
     items <- score_items(R)
     if (is.null(dim(items))) items <- matrix(items, nrow = 1)
-    as.numeric((items / 3) %*% w / sum(w))
+    .wmean(items / 3, w)
   }
   list(score = sc(raw), predict = sc,
        importance = w / sum(w),
@@ -193,15 +193,27 @@ print.ccva_component <- function(x, ...) {
 }
 
 .comp_mean <- function(X, w) {
-  lo <- apply(X, 2, min); hi <- apply(X, 2, max)
+  lo <- apply(X, 2, min, na.rm = TRUE); hi <- apply(X, 2, max, na.rm = TRUE)
   rng <- ifelse(hi - lo > 0, hi - lo, 1)
-  sc <- function(M) as.numeric(sweep(sweep(M, 2, lo), 2, rng, `/`) %*% w /
-                                 sum(w))
+  sc <- function(M) .wmean(sweep(sweep(M, 2, lo), 2, rng, `/`), w)
   list(score = sc(X), predict = sc, importance = w / sum(w),
        details = list(min = lo, max = hi))
 }
 
+# Weighted row mean over the observed entries (missing entries are skipped
+# and the weights of the observed ones renormalised).
+.wmean <- function(M, w) {
+  M <- as.matrix(M)
+  W <- matrix(w, nrow(M), length(w), byrow = TRUE)
+  W[is.na(M)] <- 0
+  M[is.na(M)] <- 0
+  out <- rowSums(M * W) / rowSums(W)
+  out[!is.finite(out)] <- NA_real_
+  as.numeric(out)
+}
+
 .comp_pca <- function(X) {
+  .no_missing(X, "component method \"pca\"")
   if (ncol(X) == 1) return(.comp_mean(X, c(1)))
   ctr <- colMeans(X); scl <- apply(X, 2, stats::sd)
   scl[scl == 0] <- 1
@@ -219,6 +231,7 @@ print.ccva_component <- function(x, ...) {
 
 .comp_penalised <- function(X, y, component, cons, vars, alpha) {
   .need("glmnet", "method = \"penalised\"")
+  .no_missing(X, "component method \"penalised\"")
   if (is.null(y))
     stop("method = \"penalised\" needs an anchor: outcomes in the data or ",
          "an explicit `anchor`.", call. = FALSE)
@@ -261,6 +274,16 @@ print.ccva_component <- function(x, ...) {
                       n_selected = sum(beta != 0), cv = cv))
 }
 
+# Stop with a clear message when a method cannot handle missing values
+.no_missing <- function(X, what) {
+  if (anyNA(X))
+    stop(what, " does not handle missing values. Build the data with ",
+         "as_ccva(..., na_action = \"omit\"), or use a method that does ",
+         "(component methods \"mean\" and \"ordinal\"; combinations ",
+         "\"weighted\", \"rule\" and \"latent\").", call. = FALSE)
+  invisible(TRUE)
+}
+
 # Anchor: oriented vulnerability proxy (higher = more vulnerable)
 .anchor <- function(x, anchor, required = TRUE) {
   if (is.numeric(anchor)) {
@@ -280,6 +303,12 @@ print.ccva_component <- function(x, ...) {
     return(NULL)
   }
   if (ncol(O) == 1) return(as.numeric(O[, 1]))
+  if (anyNA(O)) {
+    # with missing outcomes: mean of the available standardised outcomes
+    s <- rowMeans(scale(O), na.rm = TRUE)
+    s[!is.finite(s)] <- NA_real_
+    return(as.numeric(s))
+  }
   pc <- stats::prcomp(O, scale. = TRUE)
   s <- pc$x[, 1]
   if (mean(pc$rotation[, 1]) < 0) s <- -s

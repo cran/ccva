@@ -32,6 +32,30 @@ d$formative <- "adaptive"
 ccva_check(d)
 
 ## -----------------------------------------------------------------------------
+fw <- ccva_combine(d, "latent", formative_weights = "estimated",
+                   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")))
+fw$details$indicator_weights
+
+## -----------------------------------------------------------------------------
+dm <- ccva_sim
+dm$s1_thermal[sample(300, 40)] <- NA
+dm$iucn[1:30] <- NA                       # e.g. Data Deficient species
+xm <- as_ccva(dm, exposure = c("E1_risk", "E2_risk", "E3_risk"),
+  sensitivity = grep("^s[0-9]+_", names(dm), value = TRUE),
+  adaptive = grep("^a[0-9]+_", names(dm), value = TRUE),
+  outcomes = c("iucn", "pop_trend", "range_change"),
+  direction = c(pop_trend = -1, range_change = -1), id = "species",
+  na_action = "keep")
+fm <- ccva_combine(xm, "latent",
+                   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")))
+cor(fm$score[1:30], ccva_sim$V_star[1:30], method = "spearman")
+
+## -----------------------------------------------------------------------------
+r <- ccva_combine(d, "rule")
+r
+head(r$details$drivers[order(-r$details$drivers$n_only), ])
+
+## -----------------------------------------------------------------------------
 s <- ccva_simulate(n = 400, link_AE = -0.6, seed = 4)
 causal <- ccva_combine(s, "latent",
   shared_error = list(c("E1_risk", "E2_risk", "E3_risk")),
@@ -68,6 +92,11 @@ ccva_plot(risk, "curve")
 
 ## ----fig.height = 5.5---------------------------------------------------------
 ccva_plot(risk, "risk", n = 20)
+
+## -----------------------------------------------------------------------------
+cv <- ccva_cv(fit, k = 5, seed = 1, progress = FALSE)
+cv
+ccva_calibrate(fit, outcome = "iucn", cv = cv, R = 200, seed = 1)
 
 ## -----------------------------------------------------------------------------
 occ <- unique(data.frame(site = rep(sprintf("site_%02d", 1:15), each = 30),

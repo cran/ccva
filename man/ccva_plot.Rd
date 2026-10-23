@@ -8,7 +8,8 @@ ccva_plot(object, type = NULL, n = 15, ...)
 }
 \arguments{
 \item{object}{A `ccva_data`, `ccva_check`, `ccva_component`, `ccva_fit`,
-`ccva_comparison` or `ccva_uncertainty` object.}
+`ccva_comparison`, `ccva_uncertainty`, `ccva_calibration`, `ccva_sites`
+or `ccva_cv` object.}
 
 \item{type}{Figure type (see table). `NULL` gives the first listed.}
 
@@ -40,13 +41,15 @@ on the class of `object`; `type` picks the figure. Every plot is a
 | | `"scores"` | vulnerability distribution with class cut-offs |
 | | `"ranking"` | most and least vulnerable units with their components |
 | | `"contributions"` | how each component pushes each unit's score (weighted) |
-| | `"effects"` | shape curves, latent loadings or penalised coefficients |
+| | `"effects"` | shape curves, latent loadings and weights, penalised coefficients, or rule drivers |
 | | `"map"` | vulnerability over coordinates |
 | `ccva_comparison` | `"truth"` | each method against the true vulnerability |
 | | `"ranks"` | rank of each unit under two methods |
 | | `"validation"` | correlation of each method with each target |
 | `ccva_uncertainty` | `"intervals"` | score intervals, ranked |
 | | `"pairwise"` | probability one unit is more vulnerable than another |
+| `ccva_cv` | `"validation"` | in-sample vs cross-validated agreement with each outcome |
+| | `"scores"` | cross-validated scores by fold |
 }
 \examples{
 d <- ccva_sim_data()
